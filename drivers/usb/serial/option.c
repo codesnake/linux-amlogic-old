@@ -460,6 +460,10 @@ static void option_instat_callback(struct urb *urb);
 /* Advan Jetz XL */
 #define ADVAN_VENDOR_ID                            0x19f5
 #define ADVAN_PRODUCT_XL                          0x9013
+
+/* SpeedUp SU9800 usb 3g modem */
+#define SPEEDUP_PRODUCT_SU9800			0x9800
+
 /* Haier products */
 #define HAIER_VENDOR_ID				0x201e
 #define HAIER_PRODUCT_CE100			0x2009
@@ -1942,6 +1946,7 @@ static const struct usb_device_id option_ids[] = {
   	  .driver_info = (kernel_ulong_t)&four_g_w14_blacklist
   	},
 	{ USB_DEVICE(LONGCHEER_VENDOR_ID, 0x9605) },
+	{ USB_DEVICE_INTERFACE_CLASS(LONGCHEER_VENDOR_ID, SPEEDUP_PRODUCT_SU9800, 0xff) },
 	{ USB_DEVICE(LONGCHEER_VENDOR_ID, ZOOM_PRODUCT_4597) },
 	{ USB_DEVICE(LONGCHEER_VENDOR_ID, LONGCHEER_PRODUCT_SU9800) },
 	{ USB_DEVICE(LONGCHEER_VENDOR_ID, LONGCHEER_PRODUCT_SU7300U) },
