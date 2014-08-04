@@ -1699,9 +1699,13 @@ static int hub_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	 * - Change autosuspend delay of hub can avoid unnecessary auto
 	 *   suspend timer for hub, also may decrease power consumption
 	 *   of USB bus.
+	 *
+	 * - If user has indicated to prevent autosuspend by passing
+	 *   usbcore.autosuspend = -1 then keep autosuspend disabled.
 	 */
-	 /* for Amlogic dwc_otg usb controller, change to 100ms */
-	pm_runtime_set_autosuspend_delay(&hdev->dev, 100);
+	if (hdev->dev.power.autosuspend_delay >= 0)
+		/* for Amlogic dwc_otg usb controller, change to 100ms */
+		pm_runtime_set_autosuspend_delay(&hdev->dev, 100);
 
 	/*
 	 * Hubs have proper suspend/resume support, except for root hubs
