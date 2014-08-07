@@ -360,14 +360,12 @@ static void option_instat_callback(struct urb *urb);
 #define ZTE_PRODUCT_MF622			0x0001
 #define ZTE_PRODUCT_MF628			0x0015
 #define ZTE_PRODUCT_MF626			0x0031
-#define ZTE_PRODUCT_CDMA_AC682			0xffdd
+#define ZTE_PRODUCT_AC2726			0xfff1
 #define ZTE_PRODUCT_CDMA_TECH			0xfffe
-#define ZTE_PRODUCT_AC8710			0xfff1
 #define ZTE_PRODUCT_AC8710T			0xffff
 #define ZTE_PRODUCT_MC2718			0xffe8
 #define ZTE_PRODUCT_AD3812			0xffeb
 #define ZTE_PRODUCT_MC2716			0xffed
-#define ZTE_PRODUCT_AC2726			0xfff1
 
 /* ZTE PRODUCTS -- alternate vendor ID */
 #define ZTE_VENDOR_ID2				0x1d6b
@@ -660,6 +658,7 @@ static const struct option_blacklist_info zte_k3765_z_blacklist = {
 static const struct option_blacklist_info zte_ad3812_z_blacklist = {
 	.sendsetup = BIT(0) | BIT(1) | BIT(2),
 };
+
 static const struct option_blacklist_info zte_mc2718_z_blacklist = {
 	.sendsetup = BIT(1) | BIT(2) | BIT(3) | BIT(4),
 };
@@ -1874,7 +1873,6 @@ static const struct usb_device_id option_ids[] = {
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x2002, 0xff,
 	  0xff, 0xff), .driver_info = (kernel_ulong_t)&zte_k3765_z_blacklist },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x2003, 0xff, 0xff, 0xff) },
-       { USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, ZTE_PRODUCT_CDMA_AC682, 0xff, 0xff, 0xff) }, 
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0130, 0xff, 0xff, 0xff),
 		.driver_info = (kernel_ulong_t)&net_intf1_blacklist },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0133, 0xff, 0xff, 0xff),
@@ -1903,9 +1901,8 @@ static const struct usb_device_id option_ids[] = {
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0xff94, 0xff, 0xff, 0xff) },
 
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, ZTE_PRODUCT_CDMA_TECH, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, ZTE_PRODUCT_AC8710, 0xff, 0xff, 0xff) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, ZTE_PRODUCT_AC2726, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, ZTE_PRODUCT_AC8710T, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE(ZTE_VENDOR_ID2, ZTE_PRODUCT_MF_330) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, ZTE_PRODUCT_MC2718, 0xff, 0xff, 0xff),
 	 .driver_info = (kernel_ulong_t)&zte_mc2718_z_blacklist },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, ZTE_PRODUCT_AD3812, 0xff, 0xff, 0xff),
@@ -1915,7 +1912,6 @@ static const struct usb_device_id option_ids[] = {
 	{ USB_VENDOR_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0xff, 0x02, 0x01) },
 	{ USB_VENDOR_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0xff, 0x02, 0x05) },
 	{ USB_VENDOR_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0xff, 0x86, 0x10) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, ZTE_PRODUCT_AC2726, 0xff, 0xff, 0xff) },
 
 	{ USB_DEVICE(BENQ_VENDOR_ID, BENQ_PRODUCT_H10) },
 	{ USB_DEVICE(DLINK_VENDOR_ID, DLINK_PRODUCT_DWM_652) },
