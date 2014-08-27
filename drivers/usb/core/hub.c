@@ -1703,9 +1703,11 @@ static int hub_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	 * - If user has indicated to prevent autosuspend by passing
 	 *   usbcore.autosuspend = -1 then keep autosuspend disabled.
 	 */
+#ifdef CONFIG_PM_RUNTIME
 	if (hdev->dev.power.autosuspend_delay >= 0)
 		/* for Amlogic dwc_otg usb controller, change to 100ms */
 		pm_runtime_set_autosuspend_delay(&hdev->dev, 100);
+#endif
 
 	/*
 	 * Hubs have proper suspend/resume support, except for root hubs
