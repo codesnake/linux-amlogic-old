@@ -465,6 +465,7 @@ static void option_instat_callback(struct urb *urb);
 
 /* Haier products */
 #define HAIER_VENDOR_ID				0x201e
+#define HAIER_PRODUCT_CE81B			0x10f8
 #define HAIER_PRODUCT_CE100			0x2009
 #define INOVIA_VENDOR_ID				0x20a6
 #define INOVIA_PRODUCT_SEW858 		0xf00e
@@ -1971,6 +1972,7 @@ static const struct usb_device_id option_ids[] = {
 	{ USB_DEVICE(ADVAN_VENDOR_ID, 0x9909) },
        { USB_DEVICE(INOVIA_VENDOR_ID, INOVIA_PRODUCT_SEW858) },
 	{ USB_DEVICE(INOVIA_VENDOR_ID, 0x1105) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(HAIER_VENDOR_ID, HAIER_PRODUCT_CE81B, 0xff, 0xff, 0xff) },
 	/* Pirelli  */
 	{ USB_DEVICE_INTERFACE_CLASS(PIRELLI_VENDOR_ID, PIRELLI_PRODUCT_C100_1, 0xff) },
 	{ USB_DEVICE_INTERFACE_CLASS(PIRELLI_VENDOR_ID, PIRELLI_PRODUCT_C100_2, 0xff) },
