@@ -2023,11 +2023,14 @@ static int alloc_subtitle_pes_buffer(struct aml_dmx * dmx)
 	sbuff=get_stream_buffer(BUF_TYPE_SUBTITLE);
 	if(sbuff)
 	{
-		 phy_addr = sbuff->buf_start;
+		if (sbuff->flag & BUF_FLAG_IOMEM)
+			phy_addr = sbuff->buf_start;
+		else
+			phy_addr = virt_to_phys((void *)sbuff->buf_start);
 
-        	WRITE_MPEG_REG(PARSER_SUB_RP, phy_addr);
-        	WRITE_MPEG_REG(PARSER_SUB_START_PTR, phy_addr);
-        	WRITE_MPEG_REG(PARSER_SUB_END_PTR, phy_addr + sbuff->buf_size - 8);
+		WRITE_MPEG_REG(PARSER_SUB_RP, phy_addr);
+		WRITE_MPEG_REG(PARSER_SUB_START_PTR, phy_addr);
+		WRITE_MPEG_REG(PARSER_SUB_END_PTR, phy_addr + sbuff->buf_size - 8);
 
 		pr_dbg("pes buff=:%x %x\n",phy_addr,sbuff->buf_size);
 	}
