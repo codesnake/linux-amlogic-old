@@ -214,7 +214,7 @@ static int video_onoff_state = VIDEO_ENABLE_STATE_IDLE;
         spin_unlock_irqrestore(&delay_work_lock, flags); \
     } while (0)
 #else
-#define PROT_MEM_POWER_ON() 
+#define PROT_MEM_POWER_ON()
 #define PROT_MEM_POWER_OFF()
 #endif
 #else
@@ -640,7 +640,7 @@ char file_name[512];
 static u32 freerun_mode;
 
 void set_freerun_mode(int mode){
-	freerun_mode = mode;	
+	freerun_mode = mode;
 }
 EXPORT_SYMBOL(set_freerun_mode);
 
@@ -679,7 +679,7 @@ static int noneseamless_play_clone_rate = 5;
 
 #ifdef CONFIG_GE2D_KEEP_FRAME
 static ge2d_context_t *ge2d_video_context = NULL;
-static int ge2d_videotask_init()
+static int ge2d_videotask_init(void)
 {
     if (ge2d_video_context == NULL)
             ge2d_video_context = create_ge2d_work_queue();
@@ -692,7 +692,7 @@ static int ge2d_videotask_init()
 
     return 0;
 }
-static int ge2d_videotask_release()
+static int ge2d_videotask_release(void)
 {
     if (ge2d_video_context) {
             destroy_ge2d_work_queue(ge2d_video_context);
@@ -704,9 +704,9 @@ static int ge2d_videotask_release()
 static int ge2d_canvas_dup(canvas_t *srcy ,canvas_t *srcu,canvas_t *des,
     int format,u32 srcindex,u32 desindex)
 {
-    printk("ge2d_canvas_dup ADDR srcy[0x%x] srcu[0x%x] des[0x%x]\n",srcy->addr,srcu->addr,des->addr);
 
     config_para_ex_t ge2d_config;
+    printk("ge2d_canvas_dup ADDR srcy[0x%lx] srcu[0x%lx] des[0x%lx]\n",srcy->addr,srcu->addr,des->addr);
     memset(&ge2d_config,0,sizeof(config_para_ex_t));
 
     ge2d_config.alu_const_color= 0;
@@ -758,10 +758,10 @@ static int ge2d_canvas_dup(canvas_t *srcy ,canvas_t *srcu,canvas_t *des,
     return 0;
 }
 
-int ge2d_show_frame(ulong yaddr,ulong uaddr)
+void ge2d_show_frame(ulong yaddr,ulong uaddr)
 {
     u32 cur_index;
-    u32 y_index, u_index,des_index,src_index;
+    u32 y_index, u_index;
     cur_index = READ_MPEG_REG(VD1_IF0_CANVAS0);
     y_index = cur_index & 0xff;
     u_index = (cur_index >> 8) & 0xff;
@@ -782,11 +782,11 @@ int ge2d_store_frame(ulong yaddr,ulong uaddr,u32 ydupindex,u32 udupindex)
     canvas_config(ydupindex,
         (ulong)yaddr,
         cs0.width, cs0.height,
-        CANVAS_ADDR_NOWRAP, CANVAS_BLKMODE_32X32); 
+        CANVAS_ADDR_NOWRAP, CANVAS_BLKMODE_32X32);
     canvas_config(udupindex,
         (ulong)uaddr,
         cs1.width, cs1.height,
-        CANVAS_ADDR_NOWRAP, CANVAS_BLKMODE_32X32); 
+        CANVAS_ADDR_NOWRAP, CANVAS_BLKMODE_32X32);
 
     canvas_read(ydupindex,&cyd);
 
@@ -798,7 +798,7 @@ int ge2d_store_frame(ulong yaddr,ulong uaddr,u32 ydupindex,u32 udupindex)
     ge2d_canvas_dup(&cs0,&cs1,&cyd,GE2D_FORMAT_M24_NV21,src_index,des_index);
     return 0;
 }
-static void ge2d_keeplastframe_block()
+static void ge2d_keeplastframe_block(void)
 {
     mutex_lock(&video_module_mutex);
     ge2d_store_frame(keep_y_addr,keep_u_addr,DISPLAY_CANVAS_YDUP_INDEX,DISPLAY_CANVAS_UDUP_INDEX);
@@ -807,7 +807,7 @@ static void ge2d_keeplastframe_block()
 
 }
 
-#endif 
+#endif
 
 /*********************************************************/
 static inline vframe_t *video_vf_peek(void)
@@ -1214,8 +1214,9 @@ u32 property_changed_true=0;
 static void vsync_toggle_frame(vframe_t *vf)
 {
     u32 first_picture = 0;
+#if MESON_CPU_TYPE >= MESON_CPU_TYPE_MESON8
     unsigned long flags;
-
+#endif
     frame_count++;
     if(debug_flag& DEBUG_FLAG_PRINT_TOGGLE_FRAME){
         printk("%s()\n", __func__);
@@ -1346,7 +1347,7 @@ static void vsync_toggle_frame(vframe_t *vf)
             video_prot.prot3_canvas = (disp_canvas[rdma_canvas_id][0] >> 8) & 0xff;
              VSYNC_WR_MPEG_REG_BITS(VPU_PROT2_DDR, video_prot.prot2_canvas, 0, 8);
              VSYNC_WR_MPEG_REG_BITS(VPU_PROT3_DDR, video_prot.prot3_canvas, 0, 8);
-        }	 
+        }
 #endif
 #else
         canvas_copy(vf->canvas0Addr & 0xff, disp_canvas_index[0]);
@@ -1728,9 +1729,10 @@ static void viu_set_dcu(vpp_frame_par_t *frame_par, vframe_t *vf)
     }
 #else
     /* picture 0/1 control */
-    if (((vf->type & VIDTYPE_INTERLACE) == 0) &&
+    if ((((vf->type & VIDTYPE_INTERLACE) == 0) &&
         ((vf->type & VIDTYPE_VIU_FIELD) == 0) &&
-        ((vf->type & VIDTYPE_MVC) == 0)||(frame_par->vpp_2pic_mode&0x3)) {
+        ((vf->type & VIDTYPE_MVC) == 0))||
+        (frame_par->vpp_2pic_mode&0x3)) {
         /* progressive frame in two pictures */
 	if(frame_par->vpp_2pic_mode&VPP_PIC1_FIRST) {
 	    VSYNC_WR_MPEG_REG(VD1_IF0_LUMA_PSEL+ cur_dev->viu_off,
@@ -1797,12 +1799,12 @@ static int detect_vout_type(void)
             default:
                 break;
         }
-#ifdef CONFIG_VSYNC_RDMA    
-        if (is_vsync_rdma_enable()){        
-            if(vout_type == VOUT_TYPE_TOP_FIELD)            
-                vout_type = VOUT_TYPE_BOT_FIELD;        
-            else if(vout_type == VOUT_TYPE_BOT_FIELD)           
-                vout_type = VOUT_TYPE_TOP_FIELD;    
+#ifdef CONFIG_VSYNC_RDMA
+        if (is_vsync_rdma_enable()){
+            if(vout_type == VOUT_TYPE_TOP_FIELD)
+                vout_type = VOUT_TYPE_BOT_FIELD;
+            else if(vout_type == VOUT_TYPE_BOT_FIELD)
+                vout_type = VOUT_TYPE_TOP_FIELD;
         }
 #endif
     }
@@ -1959,13 +1961,13 @@ static inline bool vpts_expire(vframe_t *cur_vf, vframe_t *next_vf)
       			tsync_avevent_locked(VIDEO_TSTAMP_DISCONTINUITY, next_vf->pts);
 		else
 			tsync_avevent_locked(VIDEO_TSTAMP_DISCONTINUITY, pts);
-		
+
     		printk(" discontinue, system=0x%x vpts=0x%x\n", systime, pts);
 
 		if(systime>next_vf->pts || next_vf->pts==0){// pts==0 is a keep frame maybe.
             		return true;
 	 	}
-		
+
             	return false;
         }
     }
@@ -2002,7 +2004,7 @@ static inline bool vpts_expire(vframe_t *cur_vf, vframe_t *next_vf)
             } else{
                 vsync_pts_inc_adj = 0;
                 vsync_pts_100++;
-            }	
+            }
         }
     }
 #endif
@@ -2196,9 +2198,10 @@ static irqreturn_t vsync_isr(int irq, void *dev_id)
     s32 i, vout_type;
     vframe_t *vf;
     unsigned long flags;
+#if MESON_CPU_TYPE >= MESON_CPU_TYPE_MESON8
     vdin_v4l2_ops_t *vdin_ops = NULL;
     vdin_arg_t arg;
-
+#endif
 #ifdef CONFIG_AM_VIDEO_LOG
     int toggle_cnt;
 #endif
@@ -2897,7 +2900,7 @@ static int alloc_keep_buffer(void)
             goto err6;
         }
     }
-    printk("yaddr=%x,u_addr=%x,v_addr=%x\n",keep_y_addr,keep_u_addr,keep_v_addr);	
+    printk("yaddr=%lx,u_addr=%lx,v_addr=%lx\n",keep_y_addr,keep_u_addr,keep_v_addr);
     return 0;
 
 err6:
@@ -3084,14 +3087,14 @@ static void video_vf_unreg_provider(void)
         switch_mod_gate_by_name("ge2d", 0);
     }
     tsync_avevent(VIDEO_STOP, 0);
-#else    
+#else
     //if (!trickmode_fffb)
     if (cur_dispbuf)
     {
         vf_keep_current();
     }
     tsync_avevent(VIDEO_STOP, 0);
- #endif   
+ #endif
     atomic_set(&video_unreg_flag, 0);
     enable_video_discontinue_report = 1;
 }
@@ -3296,7 +3299,7 @@ unsigned int vf_keep_current(void)
         }
  #ifdef CONFIG_GE2D_KEEP_FRAME
         ge2d_keeplastframe_block();
-#else       
+#else
         if (keep_phy_addr(keep_y_addr) != canvas_get_addr(y_index) &&
             canvas_dup(keep_y_addr_remap, canvas_get_addr(y_index), (cs0.width *cs0.height)) &&
             canvas_dup(keep_u_addr_remap, canvas_get_addr(u_index), (cs1.width *cs1.height))){
@@ -3490,7 +3493,7 @@ static long amvideo_ioctl(struct file *file,
     case AMSTREAM_IOC_SET_OMX_VPTS:
         {
             u32 pts;
-            memcpy(&pts,arg,sizeof(u32));
+            get_user(pts,(unsigned long __user *)arg);
             omx_pts = pts;
         }
         break;
@@ -3764,7 +3767,7 @@ static long amvideo_ioctl(struct file *file,
     case AMSTREAM_IOC_SET_VSYNC_SLOW_FACTOR:
         vsync_slow_factor = arg;
         break;
-        
+
 #if MESON_CPU_TYPE < MESON_CPU_TYPE_MESON6
     /**********************************************************************
     video enhancement ioctl
@@ -4649,13 +4652,13 @@ static ssize_t vframe_states_show(struct class *cla, struct class_attribute* att
     int ret = 0;
     vframe_states_t states;
     unsigned long flags;
-	
+
     if (vf_get_states(&states) == 0) {
         ret += sprintf(buf + ret, "vframe_pool_size=%d\n", states.vf_pool_size);
         ret += sprintf(buf + ret, "vframe buf_free_num=%d\n", states.buf_free_num);
         ret += sprintf(buf + ret, "vframe buf_recycle_num=%d\n", states.buf_recycle_num);
         ret += sprintf(buf + ret, "vframe buf_avail_num=%d\n", states.buf_avail_num);
- 			
+
         spin_lock_irqsave(&lock, flags);
         {
             vframe_t *vf;
@@ -5027,7 +5030,7 @@ static int amvideo_class_resume(struct device *dev)
   ((VPP_VD2_ALPHA_MASK << VPP_VD2_ALPHA_BIT) | VPP_VD2_PREBLEND | VPP_VD1_PREBLEND | VPP_VD2_POSTBLEND | VPP_VD1_POSTBLEND | VPP_POSTBLEND_EN)
 
     if (pm_state.event == PM_EVENT_SUSPEND) {
-#if MESON_CPU_TYPE >= MESON_CPU_TYPE_MESON8		
+#if MESON_CPU_TYPE >= MESON_CPU_TYPE_MESON8
         switch_vpu_mem_pd_vmod(VPU_VIU_VD1, pm_state.mem_pd_vd1);
         switch_vpu_mem_pd_vmod(VPU_VIU_VD2, pm_state.mem_pd_vd2);
         switch_vpu_mem_pd_vmod(VPU_DI_POST, pm_state.mem_pd_di_post);

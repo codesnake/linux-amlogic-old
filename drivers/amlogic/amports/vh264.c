@@ -149,7 +149,7 @@ static const char vh264_dec_id[] = "vh264-dev";
 
 #define PROVIDER_NAME   "decoder.h264"
 
-static const struct vframe_operations_s vh264_vf_provider = {
+static const struct vframe_operations_s vh264_vf_provider_ops = {
     .peek = vh264_vf_peek,
     .get = vh264_vf_get,
     .put = vh264_vf_put,
@@ -253,7 +253,7 @@ extern u32 get_blackout_policy(void);
 #ifdef CONFIG_GE2D_KEEP_FRAME
 static ge2d_context_t *ge2d_videoh264_context = NULL;
 
-static int ge2d_videoh264task_init()
+static int ge2d_videoh264task_init(void)
 {
     if (ge2d_videoh264_context == NULL)
             ge2d_videoh264_context = create_ge2d_work_queue();
@@ -264,7 +264,7 @@ static int ge2d_videoh264task_init()
     }
     return 0;
 }
-static int ge2d_videoh264task_release()
+static int ge2d_videoh264task_release(void)
 {
     if (ge2d_videoh264_context) {
             destroy_ge2d_work_queue(ge2d_videoh264_context);
@@ -275,9 +275,9 @@ static int ge2d_videoh264task_release()
 static int ge2d_canvas_dup(canvas_t *srcy ,canvas_t *srcu,canvas_t *des,
     int format,u32 srcindex,u32 desindex)
 {
-    printk("ge2d_canvas_dupvh264 ADDR srcy[0x%x] srcu[0x%x] des[0x%x]\n",srcy->addr,srcu->addr,des->addr);
 
     config_para_ex_t ge2d_config;
+    printk("ge2d_canvas_dupvh264 ADDR srcy[0x%lx] srcu[0x%lx] des[0x%lx]\n",srcy->addr,srcu->addr,des->addr);
     memset(&ge2d_config,0,sizeof(config_para_ex_t));
 
     ge2d_config.alu_const_color= 0;
@@ -463,14 +463,14 @@ static int vh264_event_cb(int type, void *data, void *private_data)
         unsigned long flags;
         amvdec_stop();
 #ifndef CONFIG_POST_PROCESS_MANAGER
-        vf_light_unreg_provider(&vh264_vf_provider);
+        vf_light_unreg_provider(&vh264_vf_prov);
 #endif
         spin_lock_irqsave(&lock, flags);
         vh264_local_init();
         vh264_prot_init();
         spin_unlock_irqrestore(&lock, flags);
 #ifndef CONFIG_POST_PROCESS_MANAGER
-        vf_reg_provider(&vh264_vf_provider);
+        vf_reg_provider(&vh264_vf_prov);
 #endif
         amvdec_start();
     }
@@ -597,8 +597,8 @@ static void vh264_set_params(void)
     mb_width = mb_width & 0xff;
     mb_height = mb_total / mb_width;
 
-    /* AV_SCRATCH_2 
-       bit 15: frame_mbs_only_flag 
+    /* AV_SCRATCH_2
+       bit 15: frame_mbs_only_flag
        bit 13-14: chroma_format_idc */
     frame_mbs_only_flag = (seq_info >> 15) & 0x01;
     chroma_format_idc = (seq_info >> 13) & 0x03;
@@ -622,7 +622,7 @@ static void vh264_set_params(void)
     last_mb_width = mb_width;
     last_mb_height = mb_height;
 
-    if (frame_width == 0 || frame_height == 0 ||crop_infor && frame_height &&frame_width) {
+    if ((frame_width == 0) ||( frame_height == 0) ||(crop_infor && frame_height &&frame_width)) {
         frame_width = mb_width << 4;
         frame_height = mb_height << 4;
         if (frame_mbs_only_flag) {
@@ -632,7 +632,7 @@ static void vh264_set_params(void)
         }
         printk("frame_mbs_only_flag %d, crop_bottom %d, frame_height %d, mb_height %d\n",
             frame_mbs_only_flag, crop_bottom, frame_height, mb_height);
-        
+
         if (frame_height == 1088) {
             frame_height = 1080;
         }
@@ -673,9 +673,9 @@ static void vh264_set_params(void)
     if (max_dpb_size > 5) {
         if (actual_dpb_size < max_dpb_size + 3) {
             actual_dpb_size = max_dpb_size + 3;
-        if (actual_dpb_size > 24) {    
+        if (actual_dpb_size > 24) {
             actual_dpb_size = 24;
-        }            
+        }
             max_reference_size = (frame_buffer_size - mb_total * 384 * actual_dpb_size) / (mb_total * mb_mv_byte);
         }
     } else {
@@ -683,11 +683,11 @@ static void vh264_set_params(void)
             actual_dpb_size = max_dpb_size + 4;
         if (actual_dpb_size > 24) {
             actual_dpb_size = 24;
-        }            
+        }
             max_reference_size = (frame_buffer_size - mb_total * 384 * actual_dpb_size) / (mb_total * mb_mv_byte);
         }
     }
- 
+
     if (!(READ_VREG(AV_SCRATCH_F) & 0x1)) {
         addr = buf_start;
 
@@ -1079,12 +1079,12 @@ static void vh264_isr(void)
                     h264_pts_count = 0;
                     h264_first_pts_ready = 1;
                 } else {
-                
+
                     if (pts_valid && (pts > h264pts1) && h264_pts_count > 24) {
                         if (duration_from_pts_done == 0) {
                             unsigned int old_duration=frame_dur;
                             h264pts2 = pts;
-						
+
                             pts_duration = ((h264pts2 - h264pts1) / h264_pts_count) * 16 / 15;
 
 							if ((pts_duration != frame_dur) && (!pts_outside)) {
@@ -1142,9 +1142,9 @@ static void vh264_isr(void)
             	  	h264_first_valid_pts_ready=1;
 		  else
             	  	pts_valid = pts_valid && idr_flag;  // if fixed frame rate, then use duration
-		 
+
             }
-	     
+
             if ((dec_control & DEC_CONTROL_FLAG_FORCE_2997_1080P_INTERLACE) &&
                 (frame_width == 1920) &&
                 (frame_height >= 1080) &&
@@ -1553,12 +1553,12 @@ static void vh264_local_init(void)
     use_idr_framerate = ((u32)vh264_amstream_dec_info.param & 0x04) >> 2;
     max_refer_buf = !(((u32)vh264_amstream_dec_info.param & 0x10) >> 4);
     if ((u32)vh264_amstream_dec_info.param & 0x08)
-    {    
+    {
         ucode_type = UCODE_IP_ONLY_PARAM ;
     } else {
         ucode_type = 0;
     }
-    
+
     if ((u32)vh264_amstream_dec_info.param & 0x20)
     {
         error_recovery_mode_in = 1;
@@ -1698,14 +1698,14 @@ static s32 vh264_init(void)
 		firmwareloaded=1;
 		break;
     };
-	
+
 	if(!firmwareloaded){
         printk("start load orignal firmware ...\n");
         if (amvdec_loadmc(vh264_mc) < 0) {
             amvdec_disable();
             return -EBUSY;
         }
-        
+
         memcpy((u8 *)mc_cpu_addr + MC_OFFSET_HEADER, vh264_header_mc, MC_SWAP_SIZE);
         memcpy((u8 *)mc_cpu_addr + MC_OFFSET_DATA,   vh264_data_mc,   MC_SWAP_SIZE);
         memcpy((u8 *)mc_cpu_addr + MC_OFFSET_MMCO,   vh264_mmco_mc,   MC_SWAP_SIZE);
@@ -1731,11 +1731,11 @@ static s32 vh264_init(void)
 
 
  #ifdef CONFIG_POST_PROCESS_MANAGER
-    vf_provider_init(&vh264_vf_prov, PROVIDER_NAME, &vh264_vf_provider, NULL);
+    vf_provider_init(&vh264_vf_prov, PROVIDER_NAME, &vh264_vf_provider_ops, NULL);
     vf_reg_provider(&vh264_vf_prov);
     vf_notify_receiver(PROVIDER_NAME,VFRAME_EVENT_PROVIDER_START,NULL);
  #else
-    vf_provider_init(&vh264_vf_prov, PROVIDER_NAME, &vh264_vf_provider, NULL);
+    vf_provider_init(&vh264_vf_prov, PROVIDER_NAME, &vh264_vf_provider_ops, NULL);
     vf_reg_provider(&vh264_vf_prov);
  #endif
     stat |= STAT_VF_HOOK;
@@ -1850,7 +1850,7 @@ static void stream_switching_done(void)
         spin_unlock_irqrestore(&lock, flags);
     }
 }
-
+#if !defined(NV21)|| !defined(CONFIG_GE2D_KEEP_FRAME)
 static int canvas_dup(u8 *dst, ulong src_paddr, ulong size)
 {
     void __iomem *p = ioremap_wc(src_paddr, size);
@@ -1861,7 +1861,7 @@ static int canvas_dup(u8 *dst, ulong src_paddr, ulong size)
     }
     return 0;
 }
-
+#endif
 static void stream_switching_do(struct work_struct *work)
 {
     vframe_t *vf_prev, *vf_curr;
@@ -1913,19 +1913,19 @@ static void stream_switching_do(struct work_struct *work)
 #ifdef CONFIG_GE2D_KEEP_FRAME
             printk("src yaddr[0x%x] index[%d] width[%d] heigth[%d]\n",buffer_spec[buffer_index].y_addr,buffer_spec[buffer_index].y_canvas_index,\
                 buffer_spec[buffer_index].y_canvas_width,buffer_spec[buffer_index].y_canvas_height);
-            
+
             printk("src uaddr[0x%x] index[%d] width[%d] heigth[%d]\n",buffer_spec[buffer_index].u_addr,buffer_spec[buffer_index].u_canvas_index,\
                 buffer_spec[buffer_index].u_canvas_width,buffer_spec[buffer_index].u_canvas_height);
             y_index = buffer_spec[buffer_index].y_canvas_index;
             u_index = buffer_spec[buffer_index].u_canvas_index;
             canvas_read(y_index,&csy);
             canvas_read(u_index,&csu);
-            
+
             canvas_config(0, videoKeepBufPhys[0], mb_width_num << 4, mb_height_num << 4,
                           CANVAS_ADDR_NOWRAP, CANVAS_BLKMODE_32X32);
             canvas_config(1, videoKeepBufPhys[1], mb_width_num << 4, mb_height_num << 3,
                           CANVAS_ADDR_NOWRAP, CANVAS_BLKMODE_32X32);
-            
+
             y_desindex = 0;
             u_dexindex = 1;
             canvas_read(y_desindex,&cyd);
@@ -1975,7 +1975,7 @@ static void stream_switching_do(struct work_struct *work)
         }
 
         vfpool_idx[fill_ptr] = -1;
-        vf_curr->ready_jiffies64=jiffies_64;		
+        vf_curr->ready_jiffies64=jiffies_64;
         INCPTR(fill_ptr);
 
         spin_unlock_irqrestore(&lock, flags);
