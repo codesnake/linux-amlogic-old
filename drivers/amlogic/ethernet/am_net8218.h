@@ -42,8 +42,8 @@
 
 //ring buf must less than the MAX alloc length 131072
 //131072/1536~=85;
-#define TX_RING_SIZE 	128
-#define RX_RING_SIZE 	128
+#define TX_RING_SIZE 	16384	// 512, 32768
+#define RX_RING_SIZE 	32768  	// 4096, 65536
 #define CACHE_LINE 32
 #define IS_CACHE_ALIGNED(x)		(!((unsigned long )x &(CACHE_LINE-1)))
 #define CACHE_HEAD_ALIGNED(x)	((x-CACHE_LINE) & (~(CACHE_LINE-1)))
@@ -152,21 +152,26 @@ struct _rx_desc {
 };
 
 struct am_net_private {
-	struct _rx_desc *rx_ring;
+	struct _rx_desc *rx_ring;		// rx section
 	struct _rx_desc *rx_ring_dma;
-	struct _tx_desc *tx_ring;
-	struct _tx_desc *tx_ring_dma;
 	struct _rx_desc *last_rx;
+	struct tasklet_struct rx_tasklet;
+
+	struct _tx_desc *tx_ring;		// tx section
+	struct _tx_desc *tx_ring_dma;
 	struct _tx_desc *last_tx;
 	struct _tx_desc *start_tx;
+	struct tasklet_struct tx_tasklet;
+
 	struct net_device *dev;
 	struct net_device_stats stats;
 	struct timer_list timer;	/* Media monitoring timer. */
-	struct tasklet_struct rx_tasklet;
-	int int_rx_tx;
-	int pmt;
+//	int pmt;
+//	currently not used in the driver
 	unsigned int irq_mask;
-
+	struct tasklet_struct st_tasklet;
+	struct tasklet_struct rt_tasklet;
+	unsigned long status;	
 	/* Frequently used values: keep some adjacent for cache effect. */
 	spinlock_t lock;
 	unsigned int rx_buf_sz;	/* Based on MTU+slack. */
@@ -184,8 +189,6 @@ struct am_net_private {
 	int speed;
 	int oldduplex;
 	int refcnt;
-
-
 };
 
 #endif			
