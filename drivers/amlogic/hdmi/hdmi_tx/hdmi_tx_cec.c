@@ -55,6 +55,11 @@
 #include <mach/hdmi_tx_reg.h>
 #include <linux/amlogic/hdmi_tx/hdmi_tx_cec.h>
 
+#ifdef CONFIG_AML_HDMI_TX_CEC_RAW
+#include <linux/miscdevice.h>
+#include <linux/poll.h>
+#endif
+
 static hdmitx_dev_t* hdmitx_device = NULL;
 
 DEFINE_SPINLOCK(cec_input_key);
@@ -145,6 +150,185 @@ static void hdmitx_cec_late_resume(struct early_suspend *h)
 
 #endif
 
+#ifndef CONFIG_AML_HDMI_TX_CEC_RAW
+#define CEC_MISC_ECHO(...)
+#else
+#define CEC_MISC_ECHO(...) cec_misc_echo( __VA_ARGS__ )
+#define CEC_IOC_MAGIC 'c'
+#define CEC_IOC_SETLADDR _IOW(CEC_IOC_MAGIC, 0, unsigned int)
+#define CEC_MISC_BUFF_LEN 16
+
+static unsigned char misc_reg = 0;
+
+struct
+{
+    unsigned char cec_message[CEC_MISC_BUFF_LEN][MAX_MSG];
+    unsigned char cec_message_length[CEC_MISC_BUFF_LEN];
+    unsigned char read_pos;
+    unsigned char write_pos;
+    spinlock_t pos_lock;
+    wait_queue_head_t wq;
+} cec_misc_buffer;
+
+void cec_misc_init(void)
+{
+    init_waitqueue_head(&cec_misc_buffer.wq);
+    cec_misc_buffer.read_pos = 0;
+    cec_misc_buffer.write_pos = 0;
+}
+
+void cec_misc_echo(unsigned char *msg, unsigned char msg_length)
+{
+    unsigned long spin_flags;
+
+    if(msg_length > MAX_MSG || msg_length <= 0) {
+        return;
+    }
+
+    spin_lock_irqsave(&cec_misc_buffer.pos_lock, spin_flags);
+
+    memcpy( cec_misc_buffer.cec_message[cec_misc_buffer.write_pos], msg, msg_length );
+    cec_misc_buffer.cec_message_length[cec_misc_buffer.write_pos] = msg_length;
+    (cec_misc_buffer.write_pos == CEC_MISC_BUFF_LEN - 1) ? (cec_misc_buffer.write_pos = 0) : (cec_misc_buffer.write_pos++);
+
+    spin_unlock_irqrestore(&cec_misc_buffer.pos_lock, spin_flags);
+
+    hdmi_print(LOW, CEC "MISC Write\n");
+
+    wake_up(&cec_misc_buffer.wq);
+}
+
+static int cec_misc_open(struct inode *inode, struct file *file)
+{
+    return 0;
+}
+
+static int cec_misc_release(struct inode *inode, struct file *file)
+{
+    return 0;
+}
+
+static ssize_t cec_misc_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
+{
+    unsigned long spin_flags;
+    size_t ret;
+
+    if(wait_event_interruptible(cec_misc_buffer.wq,
+            cec_misc_buffer.read_pos != cec_misc_buffer.write_pos)) {
+        return -ERESTARTSYS;
+    }
+
+    spin_lock_irqsave(&cec_misc_buffer.pos_lock, spin_flags);
+
+    if(cec_misc_buffer.cec_message_length[cec_misc_buffer.read_pos] > count) {
+        spin_unlock_irqrestore(&cec_misc_buffer.pos_lock, spin_flags);
+        hdmi_print(IMP, CEC "Not enough room to copy %d bytes to user (have %d)\n", cec_misc_buffer.cec_message_length[cec_misc_buffer.read_pos], count);
+        return -1;
+    }
+    else
+    {
+        hdmi_print(LOW, CEC "Reading %d bytes to user (have room for %d)\n", cec_misc_buffer.cec_message_length[cec_misc_buffer.read_pos], count);
+    }
+
+    count = cec_misc_buffer.cec_message_length[cec_misc_buffer.read_pos];
+    ret = copy_to_user(buf, cec_misc_buffer.cec_message[cec_misc_buffer.read_pos], count);
+    if(ret != 0) {
+        spin_unlock_irqrestore(&cec_misc_buffer.pos_lock, spin_flags);
+        hdmi_print(IMP, CEC "Failed to copy %d of %d bytes to user\n", ret, count);
+        return -EFAULT;
+    }
+
+    (cec_misc_buffer.read_pos == CEC_MISC_BUFF_LEN - 1) ? (cec_misc_buffer.read_pos = 0) : (cec_misc_buffer.read_pos++);
+
+    spin_unlock_irqrestore(&cec_misc_buffer.pos_lock, spin_flags);
+
+    hdmi_print(LOW, CEC "MISC Read\n");
+
+    return count;
+}
+
+static ssize_t cec_misc_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
+{
+    unsigned char msg[MAX_MSG];
+
+    if(count > MAX_MSG || count == 0) {
+        hdmi_print(IMP, CEC "Invalid message length %d\n", count);
+        return -1;
+    }
+
+    if(copy_from_user(msg, buf, count)) {
+        hdmi_print(IMP, CEC "Failed to copy data from user\n");
+        return -EFAULT;
+    }
+
+    CEC_MISC_ECHO(msg, count);
+    if(cec_ll_tx_polling(msg, count) != 1) {
+        hdmi_print(IMP, CEC "Message transmit failed\n");
+        return -1;
+    }
+
+    return count;
+}
+
+static long cec_misc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    unsigned char logical_addr;
+
+    switch(cmd) {
+    case CEC_IOC_SETLADDR:
+        if(get_user(logical_addr, (unsigned char __user *)arg)) {
+            hdmi_print(IMP, CEC "Failed to get logical addr from user\n");
+            return -EFAULT;
+        }
+
+        cec_global_info.cec_node_info[cec_global_info.my_node_index].log_addr = logical_addr;
+#if MESON_CPU_TYPE == MESON_CPU_TYPE_MESON6
+        hdmi_wr_reg(CEC0_BASE_ADDR+CEC_LOGICAL_ADDR0, (0x1 << 4) | logical_addr);
+#endif
+#if MESON_CPU_TYPE >= MESON_CPU_TYPE_MESON8
+        aocec_wr_reg(CEC_LOGICAL_ADDR0, (0x1 << 4) | logical_addr);
+#endif
+        hdmi_print(INF, CEC "Set logical address: %d\n", logical_addr);
+        return 0;
+    }
+
+    return -EINVAL;
+}
+
+static u32 cec_misc_poll(struct file *file, poll_table *wait)
+{
+    unsigned long spin_flags;
+
+    poll_wait(file, &cec_misc_buffer.wq, wait);
+
+    spin_lock_irqsave(&cec_misc_buffer.pos_lock, spin_flags);
+    if(cec_misc_buffer.read_pos != cec_misc_buffer.write_pos) {
+        spin_unlock_irqrestore(&cec_misc_buffer.pos_lock, spin_flags);
+        return POLLIN | POLLRDNORM;
+    }
+    spin_unlock_irqrestore(&cec_misc_buffer.pos_lock, spin_flags);
+
+    return 0;
+}
+
+static const struct file_operations cec_misc_fops = {
+    .owner = THIS_MODULE,
+    .open = cec_misc_open,
+    .release = cec_misc_release,
+    .read = cec_misc_read,
+    .write = cec_misc_write,
+    .unlocked_ioctl = cec_misc_ioctl,
+    .poll = cec_misc_poll,
+};
+
+static struct miscdevice cec_misc_device = {
+    .minor = MISC_DYNAMIC_MINOR,
+    .name = "amcec",
+    .fops = &cec_misc_fops,
+};
+
+#endif
+
 void cec_isr_post_process(void)
 {
     if(!hdmitx_device->hpd_state) { //if none HDMI out,no CEC features.
@@ -162,6 +346,7 @@ void cec_usr_cmd_post_process(void)
     cec_tx_message_list_t *p, *ptmp;
     /* usr command post process */
     list_for_each_entry_safe(p, ptmp, &cec_tx_msg_phead, list) {
+        CEC_MISC_ECHO(p->msg, p->length);
         cec_ll_tx(p->msg, p->length);
         unregister_cec_tx_msg(p);
     }
@@ -172,6 +357,7 @@ static int detect_tv_support_cec(unsigned addr)
     unsigned int ret = 0;
     unsigned char msg[1];
     msg[0] = (addr<<4) | 0x0;       // 0x0, TV's root address
+    CEC_MISC_ECHO(msg, 1);
     ret = cec_ll_tx_polling(msg, 1);
     cec_hw_reset();
     hdmi_print(INF, CEC "tv%s have CEC feature\n", ret ? " " : " don\'t ");
@@ -220,8 +406,10 @@ void cec_node_init(hdmitx_dev_t* hdmitx_device)
         vendor_id = (vend_data->vendor_id ) & 0xffffff;
     }
 
+#ifndef CONFIG_AML_HDMI_TX_CEC_RAW
     if(!(hdmitx_device->cec_func_config & (1 << CEC_FUNC_MSAK)))
         return ;
+#endif
 
 #if MESON_CPU_TYPE == MESON_CPU_TYPE_MESON6
     aml_set_reg32_bits(P_PERIPHS_PIN_MUX_1, 1, 25, 1);
@@ -253,7 +441,9 @@ void cec_node_init(hdmitx_dev_t* hdmitx_device)
 
     
     for(i = 0; i < 3; i++){ 
+        unsigned char msg = (player_dev[i] << 4) | player_dev[i];
 	    hdmi_print(INF, CEC "CEC: start poll dev\n");
+        CEC_MISC_ECHO(&msg, 1);
         cec_polling_online_dev(player_dev[i], &bool);
         hdmi_print(INF, CEC "player_dev[%d]:0x%x\n", i, player_dev[i]);
         if(bool == 0){  // 0 means that no any respond
@@ -271,6 +461,27 @@ void cec_node_init(hdmitx_dev_t* hdmitx_device)
             } 
             hdmi_print(INF, CEC "physical address:0x%x\n", aml_read_reg32(P_AO_DEBUG_REG1));
             
+#ifdef CONFIG_AML_HDMI_TX_CEC_RAW
+            if(misc_reg)
+            {
+                if(misc_deregister(&cec_misc_device)) {
+                    hdmi_print(IMP, CEC "Failed to unregister MISC device\n");
+                }
+                hdmi_print(INF, CEC "Deregistered Misc Device\n");
+            }
+
+            if(misc_register(&cec_misc_device)) {
+                hdmi_print(ERR, CEC "Failed to register MISC device\n");
+                input_unregister_device(cec_global_info.remote_cec_dev);
+                return ;
+            }
+            misc_reg = 1;
+            hdmi_print(INF, CEC "Registered Misc Device\n");
+
+            if(!(hdmitx_device->cec_func_config & (1 << CEC_FUNC_MSAK)))
+                return ;
+#endif
+
             cec_global_info.cec_node_info[cec_global_info.my_node_index].power_status = TRANS_STANDBY_TO_ON;
             cec_global_info.my_node_index = player_dev[i];
             aml_write_reg32(P_AO_DEBUG_REG3, aml_read_reg32(P_AO_DEBUG_REG3) | (cec_global_info.my_node_index & 0xf));
@@ -359,7 +570,12 @@ static int cec_task(void *data)
     // Get logical address
 
     hdmi_print(INF, CEC "CEC task process\n");
+
+#ifndef CONFIG_AML_HDMI_TX_CEC_RAW
     if(hdmitx_device->cec_func_config & (1 << CEC_FUNC_MSAK)){
+#else
+    {
+#endif
         msleep_interruptible(15000);
 #if MESON_CPU_TYPE == MESON_CPU_TYPE_MESON6
         cec_gpi_init();
@@ -677,6 +893,7 @@ static irqreturn_t cec_isr_handler(int irq, void *dev_instance)
         return IRQ_HANDLED;
     }
 
+    CEC_MISC_ECHO(rx_msg, rx_len);
     register_cec_rx_msg(rx_msg, rx_len);
     wake_up(&hdmitx_device->cec_wait_rx);
 
@@ -715,6 +932,7 @@ void cec_device_vendor_id(cec_rx_message_t* pcec_message)
     msg[3] = (vendor_id >> 8) & 0xff;
     msg[4] = (vendor_id >> 0) & 0xff;
     
+    CEC_MISC_ECHO(msg, 5);
     cec_ll_tx(msg, 5);
 }
 
@@ -726,6 +944,7 @@ void cec_report_power_status(cec_rx_message_t* pcec_message)
     msg[0] = ((index & 0xf) << 4) | CEC_TV_ADDR;
     msg[1] = CEC_OC_REPORT_POWER_STATUS;
     msg[2] = cec_global_info.cec_node_info[index].power_status;
+    CEC_MISC_ECHO(msg, 3);
     cec_ll_tx(msg, 3);
 
 }
@@ -744,6 +963,7 @@ void cec_feature_abort(cec_rx_message_t* pcec_message)
         msg[2] = opcode;
         msg[3] = CEC_UNRECONIZED_OPCODE;
         
+        CEC_MISC_ECHO(msg, 4);
         cec_ll_tx(msg, 4);        
     }
 }
@@ -767,6 +987,7 @@ void cec_report_physical_address_smp(void)
     msg[3] = phy_addr_cd;
     msg[4] = cec_global_info.cec_node_info[index].dev_type;
 
+    CEC_MISC_ECHO(msg, 5);
     cec_ll_tx(msg, 5);
         
 }
@@ -780,6 +1001,7 @@ void cec_imageview_on_smp(void)
         if(hdmitx_device->cec_func_config & (1 << ONE_TOUCH_PLAY_MASK)) {
             msg[0] = ((index & 0xf) << 4) | CEC_TV_ADDR;
             msg[1] = CEC_OC_IMAGE_VIEW_ON;
+            CEC_MISC_ECHO(msg, 2);
             cec_ll_tx(msg, 2);
         }
     }  
@@ -793,6 +1015,7 @@ void cec_get_menu_language_smp(void)
     msg[0] = ((index & 0xf) << 4) | CEC_TV_ADDR;
     msg[1] = CEC_OC_GET_MENU_LANGUAGE;
     
+    CEC_MISC_ECHO(msg, 2);
     cec_ll_tx(msg, 2);
     
 }
@@ -807,6 +1030,7 @@ void cec_menu_status(cec_rx_message_t* pcec_message)
         msg[0] = ((index & 0xf) << 4) | src_log_addr;
         msg[1] = CEC_OC_MENU_STATUS;
         msg[2] = cec_global_info.cec_node_info[index].menu_status;
+        CEC_MISC_ECHO(msg, 3);
         cec_ll_tx(msg, 3);
     }
 }
@@ -825,6 +1049,7 @@ void cec_menu_status_smp(cec_device_menu_state_e status)
         msg[2] = DEVICE_MENU_INACTIVE;
         cec_global_info.cec_node_info[index].menu_status = DEVICE_MENU_INACTIVE;
     }
+    CEC_MISC_ECHO(msg, 3);
     cec_ll_tx(msg, 3);
 }
 
@@ -866,6 +1091,7 @@ void cec_active_source_smp(void)
             msg[1] = CEC_OC_ACTIVE_SOURCE;
             msg[2] = phy_addr_ab;
             msg[3] = phy_addr_cd;
+            CEC_MISC_ECHO(msg, 4);
             cec_ll_tx(msg, 4);
         }
     }
@@ -882,6 +1108,7 @@ void cec_active_source(cec_rx_message_t* pcec_message)
     msg[1] = CEC_OC_ACTIVE_SOURCE;
     msg[2] = phy_addr_ab;
     msg[3] = phy_addr_cd;
+    CEC_MISC_ECHO(msg, 4);
     cec_ll_tx(msg, 4);
     cec_global_info.cec_node_info[cec_global_info.my_node_index].menu_status = DEVICE_MENU_ACTIVE;
 }
@@ -910,6 +1137,7 @@ void cec_set_system_audio_mode(void)
             cec_global_info.cec_node_info[index].specific_info.audio.sys_audio_mode
             );
 
+    CEC_MISC_ECHO(gbl_msg, 3);
     cec_ll_tx(gbl_msg, 3);
     if(cec_global_info.cec_node_info[index].specific_info.audio.sys_audio_mode == ON)
         cec_global_info.cec_node_info[index].specific_info.audio.sys_audio_mode = OFF;
@@ -929,6 +1157,7 @@ void cec_system_audio_mode_request(void)
                 phy_addr_ab,
                 phy_addr_cd
                 );
+        CEC_MISC_ECHO(gbl_msg, 4);
         cec_ll_tx(gbl_msg, 4);
         cec_global_info.cec_node_info[index].specific_info.audio.sys_audio_mode = ON;
     }
@@ -936,6 +1165,7 @@ void cec_system_audio_mode_request(void)
         MSG_P0( index, CEC_AUDIO_SYSTEM_ADDR,//CEC_TV_ADDR,
                 CEC_OC_SYSTEM_AUDIO_MODE_REQUEST
                 );
+        CEC_MISC_ECHO(gbl_msg, 2);
         cec_ll_tx(gbl_msg, 2);
         cec_global_info.cec_node_info[index].specific_info.audio.sys_audio_mode = OFF;
     }
@@ -951,6 +1181,7 @@ void cec_report_audio_status(void)
             cec_global_info.cec_node_info[index].specific_info.audio.audio_status.audio_volume_status
             );
 
+    CEC_MISC_ECHO(gbl_msg, 3);
     cec_ll_tx(gbl_msg, 3);
 }
 void cec_request_active_source(cec_rx_message_t* pcec_message)
@@ -966,6 +1197,7 @@ void cec_set_imageview_on_irq(void)
     msg[0] = ((index & 0xf) << 4) | CEC_TV_ADDR;
     msg[1] = CEC_OC_IMAGE_VIEW_ON;
 
+    CEC_MISC_ECHO(msg, 2);
     cec_ll_tx(msg, 2);
 }
 
@@ -981,6 +1213,7 @@ void cec_inactive_source(void)
 	msg[2] = phy_addr_ab;
 	msg[3] = phy_addr_cd;
 
+    CEC_MISC_ECHO(msg, 4);
     cec_ll_tx(msg, 4);
     cec_global_info.cec_node_info[cec_global_info.my_node_index].menu_status = DEVICE_MENU_INACTIVE;
 }
@@ -1000,6 +1233,7 @@ void cec_get_version(cec_rx_message_t* pcec_message)
         msg[0] = ((index & 0xf) << 4) | CEC_TV_ADDR;
         msg[1] = CEC_OC_CEC_VERSION;
         msg[2] = CEC_VERSION_14A;
+        CEC_MISC_ECHO(msg, 3);
         cec_ll_tx(msg, 3);
     }
 }
@@ -1012,6 +1246,7 @@ void cec_give_deck_status(cec_rx_message_t* pcec_message)
     msg[0] = ((index & 0xf) << 4) | CEC_TV_ADDR;
     msg[1] = CEC_OC_DECK_STATUS;
     msg[2] = 0x1a;
+    CEC_MISC_ECHO(msg, 3);
     cec_ll_tx(msg, 3);
 }
 
@@ -1036,6 +1271,7 @@ void cec_set_standby(void)
     msg[1] = CEC_OC_STANDBY;
     if(hdmitx_device->cec_func_config & (1 << CEC_FUNC_MSAK)) {
         if(hdmitx_device->cec_func_config & (1 << ONE_TOUCH_STANDBY_MASK)) {
+                        CEC_MISC_ECHO(msg, 2);
 			cec_ll_tx(msg, 2);
 		}
 	}
@@ -1053,6 +1289,7 @@ void cec_set_osd_name(cec_rx_message_t* pcec_message)
         msg[1] = CEC_OC_SET_OSD_NAME;
         memcpy(&msg[2], cec_global_info.cec_node_info[index].osd_name, osd_len);
 
+        CEC_MISC_ECHO(msg, 2 + osd_len);
         cec_ll_tx(msg, 2 + osd_len);
     }
 }
@@ -1067,6 +1304,7 @@ void cec_set_osd_name_init(void)
     msg[1] = CEC_OC_SET_OSD_NAME;
     memcpy(&msg[2], cec_global_info.cec_node_info[index].osd_name, osd_len);
 
+    CEC_MISC_ECHO(msg, 2 + osd_len);
     cec_ll_tx(msg, 2 + osd_len);
 }
 
@@ -1309,6 +1547,7 @@ void cec_usrcmd_get_cec_version(unsigned char log_addr)
     MSG_P0(cec_global_info.my_node_index, log_addr,
             CEC_OC_GET_CEC_VERSION);
 
+    CEC_MISC_ECHO(gbl_msg, 2);
     cec_ll_tx(gbl_msg, 2);
 }
 
@@ -1316,6 +1555,7 @@ void cec_usrcmd_get_audio_status(unsigned char log_addr)
 {
     MSG_P0(cec_global_info.my_node_index, log_addr, CEC_OC_GIVE_AUDIO_STATUS);
 
+    CEC_MISC_ECHO(gbl_msg, 2);
     cec_ll_tx(gbl_msg, 2);
 }
 
@@ -1323,6 +1563,7 @@ void cec_usrcmd_get_deck_status(unsigned char log_addr)
 {
     MSG_P1(cec_global_info.my_node_index, log_addr, CEC_OC_GIVE_DECK_STATUS, STATUS_REQ_ON);
 
+    CEC_MISC_ECHO(gbl_msg, 3);
     cec_ll_tx(gbl_msg, 3);
 }
 
@@ -1330,6 +1571,7 @@ void cec_usrcmd_set_deck_cnt_mode(unsigned char log_addr, deck_cnt_mode_e deck_c
 {
     MSG_P1(cec_global_info.my_node_index, log_addr, CEC_OC_DECK_CONTROL, deck_cnt_mode);
 
+    CEC_MISC_ECHO(gbl_msg, 3);
     cec_ll_tx(gbl_msg, 3);
 }
 
@@ -1337,6 +1579,7 @@ void cec_usrcmd_get_device_power_status(unsigned char log_addr)
 {
     MSG_P0(cec_global_info.my_node_index, log_addr, CEC_OC_GIVE_DEVICE_POWER_STATUS);
 
+    CEC_MISC_ECHO(gbl_msg, 2);
     cec_ll_tx(gbl_msg, 2);
 }
 
@@ -1344,6 +1587,7 @@ void cec_usrcmd_get_device_vendor_id(unsigned char log_addr)
 {
     MSG_P0(cec_global_info.my_node_index, log_addr, CEC_OC_GIVE_DEVICE_VENDOR_ID);
 
+    CEC_MISC_ECHO(gbl_msg, 2);
     cec_ll_tx(gbl_msg, 2);
 }
 
@@ -1351,6 +1595,7 @@ void cec_usrcmd_get_osd_name(unsigned char log_addr)
 {
     MSG_P0(cec_global_info.my_node_index, log_addr, CEC_OC_GIVE_OSD_NAME);
 
+    CEC_MISC_ECHO(gbl_msg, 2);
     cec_ll_tx(gbl_msg, 2);
 }
 
@@ -1358,6 +1603,7 @@ void cec_usrcmd_get_physical_address(unsigned char log_addr)
 {
     MSG_P0(cec_global_info.my_node_index, log_addr, CEC_OC_GIVE_PHYSICAL_ADDRESS);
 
+    CEC_MISC_ECHO(gbl_msg, 2);
     cec_ll_tx(gbl_msg, 2);
 }
 
@@ -1365,6 +1611,7 @@ void cec_usrcmd_get_system_audio_mode_status(unsigned char log_addr)
 {
     MSG_P0(cec_global_info.my_node_index, log_addr, CEC_OC_GIVE_SYSTEM_AUDIO_MODE_STATUS);
 
+    CEC_MISC_ECHO(gbl_msg, 2);
     cec_ll_tx(gbl_msg, 2);
 }
 
@@ -1372,6 +1619,7 @@ void cec_usrcmd_set_standby(unsigned char log_addr)
 {
     MSG_P0(cec_global_info.my_node_index, log_addr, CEC_OC_STANDBY);
 
+    CEC_MISC_ECHO(gbl_msg, 2);
     cec_ll_tx(gbl_msg, 2);
 }
 
@@ -1381,6 +1629,7 @@ void cec_usrcmd_set_imageview_on(unsigned char log_addr)
     MSG_P0(cec_global_info.my_node_index, log_addr,
             CEC_OC_IMAGE_VIEW_ON);
 
+    CEC_MISC_ECHO(gbl_msg, 2);
     cec_ll_tx(gbl_msg, 2);
 }
 
@@ -1389,6 +1638,7 @@ void cec_usrcmd_text_view_on(unsigned char log_addr)
     MSG_P0(cec_global_info.my_node_index, log_addr,
             CEC_OC_TEXT_VIEW_ON);
 
+    CEC_MISC_ECHO(gbl_msg, 2);
     cec_ll_tx(gbl_msg, 2);
 }
 
@@ -1396,6 +1646,7 @@ void cec_usrcmd_get_tuner_device_status(unsigned char log_addr)
 {
     MSG_P0(cec_global_info.my_node_index, log_addr, CEC_OC_GIVE_TUNER_DEVICE_STATUS);
 
+    CEC_MISC_ECHO(gbl_msg, 2);
     cec_ll_tx(gbl_msg, 2);
 }
 
@@ -1403,6 +1654,7 @@ void cec_usrcmd_set_play_mode(unsigned char log_addr, play_mode_e play_mode)
 {
     MSG_P1(cec_global_info.my_node_index, log_addr, CEC_OC_PLAY, play_mode);
 
+    CEC_MISC_ECHO(gbl_msg, 3);
     cec_ll_tx(gbl_msg, 3);
 }
 
@@ -1410,6 +1662,7 @@ void cec_usrcmd_get_menu_state(unsigned char log_addr)
 {
     MSG_P1(cec_global_info.my_node_index, log_addr, CEC_OC_MENU_REQUEST, MENU_REQ_QUERY);
 
+    CEC_MISC_ECHO(gbl_msg, 3);
     cec_ll_tx(gbl_msg, 3);
 }
 
@@ -1417,6 +1670,7 @@ void cec_usrcmd_set_menu_state(unsigned char log_addr, menu_req_type_e menu_req_
 {
     MSG_P1(cec_global_info.my_node_index, log_addr, CEC_OC_MENU_REQUEST, menu_req_type);
 
+    CEC_MISC_ECHO(gbl_msg, 3);
     cec_ll_tx(gbl_msg, 3);
 }
 
@@ -1424,6 +1678,7 @@ void cec_usrcmd_get_menu_language(unsigned char log_addr)
 {
     MSG_P0(cec_global_info.my_node_index, log_addr, CEC_OC_GET_MENU_LANGUAGE);
 
+    CEC_MISC_ECHO(gbl_msg, 2);
     cec_ll_tx(gbl_msg, 2);
 }
 
@@ -1431,6 +1686,7 @@ void cec_usrcmd_get_active_source(void)
 {
     MSG_P0(cec_global_info.my_node_index, 0xF, CEC_OC_REQUEST_ACTIVE_SOURCE);
 
+    CEC_MISC_ECHO(gbl_msg, 2);
     cec_ll_tx(gbl_msg, 2);
 }
 
@@ -1445,6 +1701,7 @@ void cec_usrcmd_set_active_source(void)
 			phy_addr_ab,
 			phy_addr_cd);
 
+    CEC_MISC_ECHO(gbl_msg, 4);
     cec_ll_tx(gbl_msg, 4);
 }
 
@@ -1457,6 +1714,7 @@ void cec_usrcmd_set_deactive_source(unsigned char log_addr)
            phy_addr_ab,
            phy_addr_cd);
 
+    CEC_MISC_ECHO(gbl_msg, 4);
     cec_ll_tx(gbl_msg, 4);
 }
 
@@ -1489,6 +1747,7 @@ void cec_usrcmd_set_osd_name(cec_rx_message_t* pcec_message)
             cec_global_info.cec_node_info[index].osd_name[12],
             cec_global_info.cec_node_info[index].osd_name[13]);
 
+    CEC_MISC_ECHO(gbl_msg, 16);
     cec_ll_tx(gbl_msg, 16);
 }
 
@@ -1504,6 +1763,7 @@ void cec_usrcmd_set_device_vendor_id(void)
             (cec_global_info.cec_node_info[index].vendor_id >> 8) & 0xff,
             (cec_global_info.cec_node_info[index].vendor_id >> 0) & 0xff);
 
+    CEC_MISC_ECHO(gbl_msg, 5);
     cec_ll_tx(gbl_msg, 5);
 }
 void cec_usrcmd_set_report_physical_address(void)
@@ -1518,6 +1778,7 @@ void cec_usrcmd_set_report_physical_address(void)
            phy_addr_cd,
            CEC_PLAYBACK_DEVICE_TYPE);
 
+    CEC_MISC_ECHO(gbl_msg, 5);
     cec_ll_tx(gbl_msg, 5);
 }
 
@@ -1555,6 +1816,7 @@ void cec_routing_information(cec_rx_message_t* pcec_message)
     msg[1] = CEC_OC_ROUTING_INFORMATION;
     msg[2] = phy_addr_ab;
     msg[3] = phy_addr_cd;
+    CEC_MISC_ECHO(msg, 4);
     cec_ll_tx(msg, 4);
 	}else{
 	    cec_global_info.cec_node_info[cec_global_info.my_node_index].menu_status = DEVICE_MENU_INACTIVE;
@@ -1576,6 +1838,10 @@ static int __init cec_init(void)
     hdmi_print(INF, CEC "CEC init\n");
     memset(&cec_global_info, 0, sizeof(cec_global_info_t));
     
+#ifdef CONFIG_AML_HDMI_TX_CEC_RAW
+    cec_misc_init();
+#endif
+
 #if MESON_CPU_TYPE == MESON_CPU_TYPE_MESON6
     hdmi_wr_reg(CEC0_BASE_ADDR+CEC_CLOCK_DIV_H, 0x00 );
     hdmi_wr_reg(CEC0_BASE_ADDR+CEC_CLOCK_DIV_L, 0xf0 );
@@ -1650,6 +1916,14 @@ static void __exit cec_uninit(void)
     }
 
     hdmitx_device->cec_init_ready = 0;
+#ifdef CONFIG_AML_HDMI_TX_CEC_RAW
+    if(misc_reg) {
+        if(misc_deregister(&cec_misc_device)) {
+            hdmi_print(IMP, CEC "Failed to unregister MISC device\n");
+        }
+        hdmi_print(INF, CEC "Deregistered Misc Device\n");
+    }
+#endif
     input_unregister_device(cec_global_info.remote_cec_dev);
     cec_global_info.cec_flag.cec_fiq_flag = 0;
 }
@@ -1868,6 +2142,7 @@ void cec_usrcmd_set_dispatch(const char * buf, size_t count)
         msg[2] = 0;
         msg[3] = CEC_UNRECONIZED_OPCODE;
 
+        CEC_MISC_ECHO(msg, 4);
         cec_ll_tx(msg, 4);
         break;
     case PING_TV:    //0x1a LA : For TV CEC detected.
